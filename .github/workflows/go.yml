@@ -29,6 +29,7 @@ jobs:
       run: |
         echo "GOPATH=$(go env GOPATH)" >> $GITHUB_ENV
         echo "${GOPATH}/bin" >> $GITHUB_PATH
+        echo "${{ github.ref }}"
       shell: bash
 
     - name: set up goose
@@ -40,4 +41,7 @@ jobs:
       run: goose -version
 
     - name: goose - fix migration numbers
-      run: goose -dir migrations mysql "$DB_USER:DB_PASSWORD@tcp($DB_HOST:$DB_PORT)/$DB_NAME?parseTime=true" fix
+      run: goose -dir migrations fix
+
+    - name: goose - apply migrations
+      run: goose -dir migrations mysql "$DB_USER:DB_PASSWORD@tcp($DB_HOST:$DB_PORT)/$DB_NAME?parseTime=true" up
