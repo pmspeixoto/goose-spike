@@ -9,6 +9,13 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    environment: preview
+    env:
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_NAME: ${{ secrets.DB_NAME }}
     steps:
     - uses: actions/checkout@v3
 
@@ -23,10 +30,13 @@ jobs:
         echo "${GOPATH}/bin" >> $GITHUB_PATH
       shell: bash
 
-    - name: install goose
+    - name: set up goose
       run: |
         go version
         go install github.com/pressly/goose/v3/cmd/goose@latest
 
-    - name: test goose instalation
+    - name: goose - test instalation
       run: goose -version
+
+    - name: goose - fix migration numbers
+      run: goose -dir migrations mysql "$DB_USER:DB_PASSWORD@tcp($DB_HOST:$DB_PORT)/$DB_NAME?parseTime=true" fix
