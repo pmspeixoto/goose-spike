@@ -9,7 +9,8 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    environment: preview
+    environment:
+       name: ${{ github.ref }}
     env:
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
