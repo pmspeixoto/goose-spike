@@ -19,8 +19,8 @@ jobs:
 
     - name: set up job environment
       run: |
-        echo "::set-env name=GOPATH::$(go env GOPATH)"
-        echo "::add-path::$(go env GOPATH)/bin"
+        echo "GOPATH=$(go env GOPATH)" >> $GITHUB_ENV
+        echo "${GOPATH}/bin" >> $GITHUB_PATH
       shell: bash
 
     - name: install goose
