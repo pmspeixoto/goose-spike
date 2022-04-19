@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     environment:
-       name: ${{ github.ref }}
+       name: ${{ github.ref_name }}
     env:
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -29,7 +29,7 @@ jobs:
       run: |
         echo "GOPATH=$(go env GOPATH)" >> $GITHUB_ENV
         echo "${GOPATH}/bin" >> $GITHUB_PATH
-        echo "${{ github.ref }}"
+        echo "${{ github.ref_name }}"
       shell: bash
 
     - name: set up goose
