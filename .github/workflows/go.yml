@@ -1,0 +1,32 @@
+name: Go
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: set up go environment
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.18
+
+    - name: set up job environment
+      run: |
+        echo "::set-env name=GOPATH::$(go env GOPATH)"
+        echo "::add-path::$(go env GOPATH)/bin"
+      shell: bash
+
+    - name: install goose
+      run: |
+        go version
+        go install github.com/pressly/goose/v3/cmd/goose@latest
+
+    - name: test goose instalation
+      run: goose -version
