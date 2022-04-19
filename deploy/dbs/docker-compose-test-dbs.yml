@@ -1,0 +1,49 @@
+version: '3'
+services:
+
+  db-team-a:
+    image: mysql/mysql-server:latest
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db-test
+      MYSQL_USER: user-test
+      MYSQL_PASSWORD: password-test
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db-data-a:/var/lib/mysql
+    ports:
+      - 3306:3306
+
+  db-team-b:
+    image: mysql/mysql-server:latest
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db-test
+      MYSQL_USER: user-test
+      MYSQL_PASSWORD: password-test
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db-data-b:/var/lib/mysql
+    ports:
+      - 3307:3306
+
+  db-team-master:
+    image: mysql/mysql-server:latest
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db-test
+      MYSQL_USER: user-test
+      MYSQL_PASSWORD: password-test
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db-data-master:/var/lib/mysql
+    ports:
+      - 3308:3306
+
+volumes:
+  db-data-a:
+    driver: local
+  db-data-b:
+    driver: local
+  db-data-master:
+    driver: local
