@@ -1,0 +1,2 @@
+ALTER TABLE pdfs
+  ADD COLUMN event_type VARCHAR(255);

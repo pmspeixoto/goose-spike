@@ -1,0 +1,2 @@
+ALTER TABLE property_purchases
+    ADD COLUMN tags VARCHAR(255) NOT NULL DEFAULT '';

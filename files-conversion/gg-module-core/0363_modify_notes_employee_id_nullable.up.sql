@@ -1,0 +1,2 @@
+ALTER TABLE notes
+    MODIFY COLUMN employee_id INT NULL;

@@ -1,0 +1,13 @@
+ALTER TABLE mortgages
+    DROP COLUMN repayment_type,
+    DROP COLUMN mortgage_term_years,
+    DROP COLUMN personal_guarantee,
+    DROP COLUMN needs_other_mortgages,
+    DROP COLUMN initial_fixed_period,
+    DROP COLUMN missed_loan_payments,
+    DROP COLUMN missed_loan_payments_reason,
+    DROP COLUMN credit_defaults_or_ccj,
+    DROP COLUMN credit_defaults_or_ccj_reason,
+    DROP COLUMN uk_properties_value_in_cents,
+    DROP COLUMN resides_in_uk,
+    DROP COLUMN years_resides_in_uk;

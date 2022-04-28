@@ -1,0 +1,2 @@
+ALTER TABLE referrals
+ ADD COLUMN is_outbound BOOLEAN NOT NULL DEFAULT false;

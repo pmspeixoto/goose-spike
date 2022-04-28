@@ -1,0 +1,1 @@
+ALTER TABLE change_requests_markdowns CHANGE COLUMN change_request_id share_transfer_request_id INT NOT NULL;

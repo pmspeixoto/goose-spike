@@ -1,0 +1,1 @@
+ALTER TABLE share_transfer_requests_markdowns RENAME change_requests_markdowns;

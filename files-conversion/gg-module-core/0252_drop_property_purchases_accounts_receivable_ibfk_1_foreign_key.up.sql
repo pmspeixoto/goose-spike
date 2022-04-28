@@ -1,0 +1,2 @@
+ALTER TABLE property_purchases_accounts_receivable
+    DROP FOREIGN KEY property_purchases_accounts_receivable_ibfk_1;

@@ -1,0 +1,1 @@
+ALTER TABLE markdowns DROP FOREIGN KEY `markdowns_ibfk_1`, DROP COLUMN company_id;

@@ -1,0 +1,2 @@
+ALTER TABLE users
+    ADD COLUMN google_sso BOOL NOT NULL DEFAULT false;

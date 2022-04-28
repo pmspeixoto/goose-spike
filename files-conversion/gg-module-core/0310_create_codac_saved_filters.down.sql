@@ -1,0 +1,1 @@
+DROP TABLE codac_saved_filters;

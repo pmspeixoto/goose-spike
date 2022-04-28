@@ -1,0 +1,2 @@
+ALTER TABLE property_purchases
+ADD COLUMN consent_monthly_subscription_at BIGINT;

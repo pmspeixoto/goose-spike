@@ -1,0 +1,2 @@
+ALTER TABLE files
+  MODIFY category TINYINT(4) DEFAULT NULL;

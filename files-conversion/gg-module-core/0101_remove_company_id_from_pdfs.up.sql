@@ -1,0 +1,1 @@
+ALTER TABLE pdfs DROP FOREIGN KEY `pdfs_ibfk_1`, DROP COLUMN company_id;

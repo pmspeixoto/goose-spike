@@ -1,0 +1,1 @@
+ALTER TABLE consultants ADD COLUMN employee_name VARCHAR(255) NOT NULL DEFAULT '';

@@ -1,0 +1,2 @@
+ALTER TABLE companies
+    ADD COLUMN auth_code_requested BOOLEAN NOT NULL DEFAULT FALSE;

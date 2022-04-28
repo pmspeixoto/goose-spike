@@ -1,0 +1,2 @@
+ALTER TABLE uploaded_pdfs
+ADD COLUMN checksum VARCHAR(255) NOT NULL;

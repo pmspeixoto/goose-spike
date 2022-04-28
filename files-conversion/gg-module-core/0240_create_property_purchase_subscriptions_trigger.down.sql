@@ -1,0 +1,1 @@
+DROP TRIGGER property_purchases_subscriptions_deprecation;

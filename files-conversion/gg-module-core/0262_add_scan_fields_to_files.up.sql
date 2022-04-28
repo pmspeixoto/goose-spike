@@ -1,0 +1,3 @@
+ALTER TABLE files
+    ADD COLUMN scan_status VARCHAR(255) NOT NULL DEFAULT '',
+    ADD COLUMN scan_signature VARCHAR(255) NOT NULL DEFAULT '';

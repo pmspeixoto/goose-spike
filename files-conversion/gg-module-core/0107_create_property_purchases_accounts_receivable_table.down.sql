@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS property_purchases_accounts_receivable;

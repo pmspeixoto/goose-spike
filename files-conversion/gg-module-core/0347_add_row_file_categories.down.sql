@@ -1,0 +1,1 @@
+DELETE FROM file_categories WHERE category = "EVIDENCE_OF_PROPERTY_PURCHASE_FUNDS";

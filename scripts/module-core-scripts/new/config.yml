@@ -1,0 +1,1241 @@
+# Golang CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-go/ for more details
+version: 2.1
+orbs:
+  slack: circleci/slack@3.4.2
+  jira: circleci/jira@1.3.1
+  nancy: sonatype-nexus-community/circleci-nancy-orb@0.0.21
+  gcp-gcr: circleci/gcp-gcr@0.15.0
+
+parameters:
+  workflow-trigger:
+    type: string
+    default: "auto"
+
+references:
+  workspace_root: &workspace_root
+                    /tmp/workspace
+  attach_workspace: &attach_workspace
+    attach_workspace:
+      at: *workspace_root
+
+commands:
+  migrate_up:
+    description: "Migrate Up"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      google_sql_instance:
+        type: string
+      db_name:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Restore bin"
+          command: |
+            set -exu
+            cp /tmp/workspace/module-core $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Restore Cloud Proxy"
+          command: |
+            set -exu
+            cp /tmp/workspace/cloud_sql_proxy $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Run Cloud Proxy"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+
+            ./cloud_sql_proxy -instances=<< parameters.google_sql_instance >>
+          background: true
+      - run:
+          name: "Migrate Up"
+          command: |
+            if [[ "<< parameters.db_name >>" == *"staging"* ]]; then
+              case $CIRCLE_BRANCH in
+                *apl*)
+                  DB_PREFIX="apl_"
+                  ;;
+                *et*)
+                  DB_PREFIX="et_"
+                  ;;
+                *cas*)
+                  DB_PREFIX="cas_"
+                  ;;
+              esac
+            fi
+
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            /tmp/workspace/ci-scripts/database/migrate.sh \
+              -H 0.0.0.0 \
+              -P 3306 \
+              -p mysql_password \
+              -u mysql_user \
+              -d ${DB_PREFIX}<< parameters.db_name >> \
+              -f migration/queries \
+              -i << parameters.google_project_id >> \
+              -a migrate \
+              -g $CIRCLE_BUILD_URL
+
+      - persist_to_workspace:
+          root: *workspace_root
+          paths:
+            - migration_versions.env
+
+  rollback_db:
+    description: "Rollback DB"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      google_sql_instance:
+        type: string
+      db_name:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Restore bin"
+          command: |
+            set -exu
+            cp /tmp/workspace/module-core $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Restore Cloud Proxy"
+          command: |
+            set -exu
+            cp /tmp/workspace/cloud_sql_proxy $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Run Cloud Proxy"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+
+            ./cloud_sql_proxy -instances=<< parameters.google_sql_instance >>
+          background: true
+      - run:
+          name: "Rollback DB"
+          command: |
+            if [[ "<< parameters.db_name >>" == *"staging"* ]]; then
+              case $CIRCLE_BRANCH in
+                *apl*)
+                  DB_PREFIX="apl_"
+                  ;;
+                *et*)
+                  DB_PREFIX="et_"
+                  ;;
+                *cas*)
+                  DB_PREFIX="cas_"
+                  ;;
+              esac
+            fi
+
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            export $(cat /tmp/workspace/migration_versions.env | xargs)
+            /tmp/workspace/ci-scripts/database/rollback.sh \
+              -H 0.0.0.0 \
+              -P 3306 \
+              -p mysql_password \
+              -u mysql_user \
+              -d ${DB_PREFIX}<< parameters.db_name >> \
+              -f migration/queries \
+              -i << parameters.google_project_id >> \
+              -t $PREVIOUS_MIGRATION_NUMBER
+
+  # Only run this after migrate up and only for core databases
+  seed_up:
+    description: "Seed up"
+    parameters:
+      db_name:
+        type: string
+      service_account:
+        type: string
+    steps:
+      - run:
+          command: |
+            if [[ "<< parameters.db_name >>" == *"staging"* ]]; then
+              case $CIRCLE_BRANCH in
+                *apl*)
+                  DB_PREFIX="apl_"
+                  ;;
+                *et*)
+                  DB_PREFIX="et_"
+                  ;;
+                *cas*)
+                  DB_PREFIX="cas_"
+                  ;;
+              esac
+            fi
+
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            /tmp/workspace/ci-scripts/database/migrate.sh \
+              -H 0.0.0.0 \
+              -P 3306 \
+              -p mysql_password \
+              -u mysql_user \
+              -d ${DB_PREFIX}<< parameters.db_name >> \
+              -f migration/queries \
+              -s seed_migration/env/<< parameters.env >> \
+              -i << parameters.google_project_id >> \
+              -a seed \
+              -g $CIRCLE_BUILD_URL
+
+  clean:
+    description: "Clean DB"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      google_sql_instance:
+        type: string
+      db_name:
+        type: string
+      env:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Restore bin"
+          command: |
+            set -exu
+            cp /tmp/workspace/module-core $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Restore Cloud Proxy"
+          command: |
+            set -exu
+            cp /tmp/workspace/cloud_sql_proxy $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Run Cloud Proxy"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+
+            ./cloud_sql_proxy -instances=<< parameters.google_sql_instance >>
+          background: true
+      - run:
+          name: "Clean"
+          command: |
+            if [[ "<< parameters.db_name >>" == *"staging"* ]]; then
+              case $CIRCLE_BRANCH in
+                *apl*)
+                  TEAM_PREFIX="apl"
+                  ;;
+                *et*)
+                  TEAM_PREFIX="et"
+                  ;;
+                *cas*)
+                  TEAM_PREFIX="cas"
+                  ;;
+              esac
+              DB_PREFIX=${TEAM_PREFIX}_
+              URL_PREFIX=${TEAM_PREFIX}-
+            fi
+
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            /tmp/workspace/ci-scripts/database/migrate.sh \
+              -H 0.0.0.0 \
+              -P 3306 \
+              -p mysql_password \
+              -u mysql_user \
+              -d ${DB_PREFIX}<< parameters.db_name >> \
+              -f migration/queries \
+              -s seed_migration/env/<< parameters.env >> \
+              -i << parameters.google_project_id >> \
+              -a clean
+
+            curl --location --request PUT 'https://'${URL_PREFIX}'module-core.backend.'<< parameters.env >>'.getground.co.uk/api/v2/reindex' \
+                --header 'Authorization: Bearer '${STAGING_OAUTH_TOKEN}'' \
+                --header 'Content-Type: text/plain' \
+                --data-raw '{
+                    "indices":[
+                        "users",
+                        "property_purchases",
+                        "companies",
+                        "partners"
+                    ],
+                    "hard":true
+                }'
+
+  build-push-docker:
+    description: "Build docker image and push to GCR"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Restore bins"
+          command: |
+            set -exu
+            cp /tmp/workspace/module-core .
+            cp /tmp/workspace/md2pdf .
+      - run:
+          name: "Restore docs"
+          command: |
+            set -exu
+            mkdir -p docs
+            cp -r /tmp/workspace/docs/* docs/
+      - gcp-gcr/gcr-auth:
+          gcloud-service-key: << parameters.service_account >>
+          google-compute-zone: << parameters.google_compute_zone >>
+          google-project-id: << parameters.google_project_id >>
+      - run:
+          name: "Build docker image"
+          command: make build-docker VERSION=$CIRCLE_SHA1 REPOSITORY=eu.gcr.io/$<< parameters.google_project_id >>/module-core
+      - gcp-gcr/push-image:
+          google-project-id: << parameters.google_project_id >>
+          image: module-core
+          tag: $CIRCLE_SHA1
+          registry-url: eu.gcr.io
+
+  promote_version:
+    description: promote version to serve traffic
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      from_version:
+        type: string
+      to_version:
+        type: string
+      flags:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Setup gcloud credentials"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+      - run:
+          name: "migrate traffic"
+          command: |
+            export $(cat /tmp/workspace/versions-appengine.env | xargs)
+            bash scripts/migrate_traffic.sh -f << parameters.from_version >> -t << parameters.to_version >> << parameters.flags >>
+      - persist_to_workspace:
+          root: *workspace_root
+          paths:
+            - versions-appengine.env
+
+  deploy:
+    description: "Deploy to kubernetes"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      cluster_name:
+        type: string
+      service_definition:
+        type: string
+      image:
+        type: string
+      auto_promote:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Setup gcloud credentials"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+      - run:
+          name: "Deploy to Cluster"
+          command: |
+            NAMESPACE_ARG="-N services"
+            if [[ "<< parameters.cluster_name >>" == *"staging"* ]]; then
+              case $CIRCLE_BRANCH in
+                *apl*)
+                  NAMESPACE_ARG="-N apl-services"
+                  sed -i -e 's/$TEAM_ENV/apl/g' << parameters.service_definition >>
+                  ;;
+                *et*)
+                  NAMESPACE_ARG="-N et-services"
+                  sed -i -e 's/$TEAM_ENV/et/g' << parameters.service_definition >>
+                  ;;
+                *cas*)
+                  NAMESPACE_ARG="-N cas-services"
+                  sed -i -e 's/$TEAM_ENV/cas/g' << parameters.service_definition >>
+                  ;;
+              esac
+            fi
+
+            /tmp/workspace/ci-scripts/deployment/deploy.sh \
+              -c << parameters.cluster_name >> \
+              -n module-core \
+              -f << parameters.service_definition >> \
+              -d << parameters.image >> \
+              -p << parameters.auto_promote >> \
+              $NAMESPACE_ARG
+          no_output_timeout: 15m
+      - persist_to_workspace:
+          root: *workspace_root
+          paths:
+            - versions.env
+
+  promote:
+    description: "Promote"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      cluster_name:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Setup gcloud credentials"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+      - run:
+          name: "Promote revision"
+          command: |
+            export $(cat /tmp/workspace/versions.env | xargs)
+            /tmp/workspace/ci-scripts/deployment/promote.sh \
+              -c << parameters.cluster_name >> \
+              -n module-core \
+              -v $LATEST_VERSION
+          no_output_timeout: 15m
+
+  rollback:
+    description: "Rollback"
+    parameters:
+      google_project_id:
+        type: string
+      service_account:
+        type: string
+      google_compute_zone:
+        type: string
+      cluster_name:
+        type: string
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Setup gcloud credentials"
+          command: |
+            echo << parameters.service_account >> | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project << parameters.google_project_id >>
+            gcloud --quiet config set compute/zone << parameters.google_compute_zone >>
+      - run:
+          name: "Rollback to previous revision"
+          command: |
+            export $(cat /tmp/workspace/versions.env | xargs)
+            /tmp/workspace/ci-scripts/deployment/promote.sh \
+              -c << parameters.cluster_name >> \
+              -n module-core \
+              -v $STABLE_VERSION
+          no_output_timeout: 15m
+
+  scan_code:
+    description: Scan code and dependencies
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Scan code"
+          command: |
+            make build
+            gosec ./...
+
+jobs:
+  build:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/ci-module-core:1.16.2-buster
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - *attach_workspace
+      - checkout
+      - run:
+          name: "Get CI scripts"
+          command: |
+            git clone --depth 1 --branch v0.1.9 git@github.com:getground/ci-scripts.git
+            mv ci-scripts/ /tmp/workspace/
+      - run:
+          name: "Make build"
+          command: make build
+      - run:
+          name: "Persist vendor"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/vendor
+            mv vendor/* /tmp/workspace/vendor/
+      - run:
+          name: "Persist core proto assets"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/pb
+            mv pb/* /tmp/workspace/pb/
+      - run:
+          name: "Persist elastic proto assets"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/elastic-pb
+            mv module-elastic/pb/* /tmp/workspace/elastic-pb/
+      - run:
+          name: "Persist bin"
+          command: |
+            set -exu
+            mv module-core /tmp/workspace/
+      - run:
+          name: "Persist Cloud Proxy"
+          command: |
+            apt install wget
+            wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+            chmod +x cloud_sql_proxy
+
+            mv cloud_sql_proxy /tmp/workspace/
+      - run:
+          name: "Persist md2pdf"
+          command: mv $GOPATH/bin/md2pdf /tmp/workspace/
+      - run:
+          name: "Persist font"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/fonts
+            mv fonts/* /tmp/workspace/fonts/
+      - run:
+          name: "Persist docs (v3-swagger)"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/docs
+            mv docs/* /tmp/workspace/docs/
+      - run:
+          name: "Persist legal docs"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/assets
+            mv assets/* /tmp/workspace/assets/
+      - persist_to_workspace:
+          root: *workspace_root
+          paths:
+            - pb
+            - elastic-pb
+            - vendor
+            - module-core
+            - cloud_sql_proxy
+            - md2pdf
+            - fonts
+            - assets
+            - docs
+            - ci-scripts/
+      - jira/notify
+
+  test:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/ci-module-core:1.16.2-buster
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+      - image: circleci/mysql:5.7-ram
+        environment:
+          MYSQL_ROOT_PASSWORD: ''
+          MYSQL_DATABASE: test_module_core
+          MYSQL_USER: username
+          MYSQL_PASSWORD: password
+      - image: docker.elastic.co/elasticsearch/elasticsearch:7.6.1
+        environment:
+          - cluster.name: test-cluster
+          - xpack.security.enabled: false
+          - transport.host: localhost
+          - network.host: 0.0.0.0
+          - http.port: 9200
+          - discovery.type: single-node
+          - ES_JAVA_OPTS: -Xms750m -Xmx750m
+    resource_class: large
+
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Restore bin"
+          command: |
+            set -exu
+            cp /tmp/workspace/module-core $CIRCLE_WORKING_DIRECTORY
+      - run:
+          name: "Restore core proto"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/pb
+            cp -r /tmp/workspace/pb/* pb/
+      - run:
+          name: "Restore elastic proto"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/elastic-pb
+            cp -r /tmp/workspace/elastic-pb/* module-elastic/pb/
+      - run:
+          name: "Persist docs (v3-swagger)"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/docs
+            mkdir -p /go/src/github.com/getground/module-core/docs
+            cp -r /tmp/workspace/docs/* docs/
+      - run:
+          name: "Restore vendor"
+          command: |
+            set -exu
+            mkdir -p /tmp/workspace/vendor
+            mkdir -p /go/src/github.com/getground/module-core/vendor
+            cp -r /tmp/workspace/vendor/* /go/src/github.com/getground/module-core/vendor/
+      - run:
+          name: "Wait for MySQL DB to be ready"
+          command: |
+
+            for i in `seq 1 10`;
+            do
+              nc -z localhost 3306 && echo Success && exit 0
+              echo -n .
+              sleep 1
+
+              done
+            echo Failed waiting for MySQL && exit 1
+      - run:
+          name: "Grant MySQL DB access to test tables"
+          command: |
+            apt-get update
+            apt-get install -yq default-mysql-client
+            mysql -u root --protocol=TCP -e "GRANT ALL PRIVILEGES ON \`test\_module\_core\_%\` . * TO  'username'@'%'"
+      - run:
+          name: "Wait for ElasticSearch to be ready"
+          command: |
+            sleep 5
+            for i in `seq 1 10`;
+            do
+              curl 0.0.0.0:9200 && echo Success && exit 0
+              echo -n .
+              sleep 1
+
+              done
+            echo Failed waiting for elasticsearch && exit 1
+      - run:
+          name: "Make test"
+          command: GOLANG_PROTOBUF_REGISTRATION_CONFLICT=warn  make -j2 test-with-coverage
+      - run:
+          name: "Upload coverage reports to codecov"
+          command: bash scripts/codecov.sh -f 'coverage_*.txt' -t '2002eff8-5580-4c77-adbb-335d1020535d'
+
+  stg-build-push-docker:
+    executor: gcp-gcr/default
+    steps:
+      - build-push-docker:
+          google_compute_zone: GOOGLE_COMPUTE_ZONE_STAGING
+          google_project_id: GOOGLE_PROJECT_ID_STAGING
+          service_account: GCLOUD_SERVICE_KEY_STAGING
+
+  stg-migrate-core:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - migrate_up:
+          google_project_id: ${GOOGLE_PROJECT_ID_STAGING}
+          service_account: ${GCLOUD_SERVICE_KEY_STAGING}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_STAGING}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: staging_core
+
+  stg-clean-core:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - clean:
+          google_project_id: ${GOOGLE_PROJECT_ID_STAGING}
+          service_account: ${GCLOUD_SERVICE_KEY_STAGING}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_STAGING}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: staging_core
+          env: staging
+
+  stg-rollback-core-db:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - rollback_db:
+          google_project_id: ${GOOGLE_PROJECT_ID_STAGING}
+          service_account: ${GCLOUD_SERVICE_KEY_STAGING}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_STAGING}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: staging_core
+
+  stg-deploy:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - deploy:
+          google_project_id: ${GOOGLE_PROJECT_ID_STAGING}
+          service_account: ${GCLOUD_SERVICE_KEY_STAGING}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_STAGING}
+          cluster_name: staging-cluster-v2
+          service_definition: ./deploy/staging.yaml
+          image: eu.gcr.io/${GOOGLE_PROJECT_ID_STAGING}/module-core:$CIRCLE_SHA1
+          auto_promote: 'true'
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB deployed module-core to kube on staging! Branch: ${CIRCLE_BRANCH}'
+
+  pre-build-push-docker:
+    executor: gcp-gcr/default
+    steps:
+      - build-push-docker:
+          google_compute_zone: GOOGLE_COMPUTE_ZONE_QA
+          google_project_id: GOOGLE_PROJECT_ID_PREVIEW
+          service_account: GCLOUD_SERVICE_KEY_QA
+
+  pre-migrate-core:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - migrate_up:
+          google_project_id: ${GOOGLE_PROJECT_ID_PREVIEW}
+          service_account: ${GCLOUD_SERVICE_KEY_QA}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_QA}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: preview_module_core
+
+  pre-clean-core:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - clean:
+          google_project_id: ${GOOGLE_PROJECT_ID_PREVIEW}
+          service_account: ${GCLOUD_SERVICE_KEY_QA}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_QA}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: preview_module_core
+          env: preview
+
+  pre-deploy:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - deploy:
+          google_project_id: ${GOOGLE_PROJECT_ID_PREVIEW}
+          service_account: ${GCLOUD_SERVICE_KEY_QA}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_QA}
+          cluster_name: preview-cluster-v2
+          service_definition: ./deploy/preview.yaml
+          image: eu.gcr.io/${GOOGLE_PROJECT_ID_PREVIEW}/module-core:$CIRCLE_SHA1
+          auto_promote: 'false'
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB deployed module-core to kube on preview! Branch: ${CIRCLE_BRANCH}'
+
+  pre-promote:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - promote:
+          google_project_id: ${GOOGLE_PROJECT_ID_PREVIEW}
+          service_account: ${GCLOUD_SERVICE_KEY_QA}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_QA}
+          cluster_name: preview-cluster-v2
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB successfully promoted module-core version $CIRCLE_SHA1!'
+
+  pre-rollback-core-db:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - rollback_db:
+          google_project_id: ${GOOGLE_PROJECT_ID_PREVIEW}
+          service_account: ${GCLOUD_SERVICE_KEY_QA}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_QA}
+          google_sql_instance: "terranova-staging-shared:europe-west1:terranova-staging-shared-mysql=tcp:3306"
+          db_name: preview_module_core
+
+  prd-build-push-docker:
+    executor: gcp-gcr/default
+    steps:
+      - build-push-docker:
+          google_compute_zone: GOOGLE_COMPUTE_ZONE_PROD_V2
+          google_project_id: GOOGLE_PROJECT_ID_PROD_V2
+          service_account: GCLOUD_SERVICE_KEY_PROD_V2
+
+  prd-migrate-core:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - migrate_up:
+          google_project_id: ${GOOGLE_PROJECT_ID_PROD_V2}
+          service_account: ${GCLOUD_SERVICE_KEY_PROD_V2}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_PROD_V2}
+          google_sql_instance: "terranova-prod-module-core-v2:europe-west1:terranova-prod-module-core-v2-mysql=tcp:3306"
+          db_name: prod_module_core
+
+  prd-rollback-core-db:
+    docker:
+      - image: google/cloud-sdk:365.0.0
+        environment:
+          GOPATH: /go
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - rollback_db:
+          google_project_id: ${GOOGLE_PROJECT_ID_PROD_V2}
+          service_account: ${GCLOUD_SERVICE_KEY_PROD_V2}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_PROD_V2}
+          google_sql_instance: "terranova-prod-module-core-v2:europe-west1:terranova-prod-module-core-v2-mysql=tcp:3306"
+          db_name: prod_module_core
+
+  prd-deploy:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - deploy:
+          google_project_id: ${GOOGLE_PROJECT_ID_PROD_V2}
+          service_account: ${GCLOUD_SERVICE_KEY_PROD_V2}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_PROD_V2}
+          cluster_name: prod-cluster-v2
+          service_definition: ./deploy/production.yaml
+          image: eu.gcr.io/${GOOGLE_PROJECT_ID_PROD_V2}/module-core:$CIRCLE_SHA1
+          auto_promote: 'false'
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB deployed module-core to kube on prod! Branch: ${CIRCLE_BRANCH}'
+
+  prd-promote:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - promote:
+          google_project_id: ${GOOGLE_PROJECT_ID_PROD_V2}
+          service_account: ${GCLOUD_SERVICE_KEY_PROD_V2}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_PROD_V2}
+          cluster_name: prod-cluster-v2
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB successfully promoted module-core version $CIRCLE_SHA1!'
+
+  prd-rollback:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/knw:latest
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    steps:
+      - rollback:
+          google_project_id: ${GOOGLE_PROJECT_ID_PROD_V2}
+          service_account: ${GCLOUD_SERVICE_KEY_PROD_V2}
+          google_compute_zone: ${GOOGLE_COMPUTE_ZONE_PROD_V2}
+          cluster_name: prod-cluster-v2
+      - slack/status:
+          webhook: 'https://hooks.slack.com/services/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'
+          success_message: ':tada: $CIRCLE_JOB successfully rolled back module-core version $CIRCLE_SHA1 to previous version'
+
+  dependency-scan:
+    executor: nancy/golang-executor
+    steps:
+      - checkout
+      - nancy/install-nancy
+      - nancy/run-nancy
+
+  code-scan:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/gosec:2.7.0-buster
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - scan_code
+
+  linter-scan:
+    docker:
+      - image: eu.gcr.io/staging-backend-236514/ci-module-core:1.16.2-buster
+        auth:
+          username: _json_key
+          password: $GCLOUD_SERVICE_KEY_STAGING
+    working_directory: /go/src/github.com/getground/module-core
+    steps:
+      - checkout
+      - *attach_workspace
+      - run:
+          name: "Run linters"
+          command: |
+            make build
+            make lint
+
+workflows:
+  version: 2
+  build-test-and-approval-deploy:
+    when:
+      equal: [ "auto", << pipeline.parameters.workflow-trigger >>]
+    jobs:
+      - build
+      - test:
+          requires:
+            - build
+
+      - dependency-scan:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - /release\/.*/
+                - master
+
+      - code-scan:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - /release\/.*/
+                - master
+
+      - linter-scan:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - /release\/.*/
+
+      - stg-hold-deploy:
+          type: approval
+          requires:
+            - build
+            - test
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - stg-migrate-core:
+          requires:
+            - stg-hold-deploy
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - stg-build-push-docker:
+          requires:
+            - stg-hold-deploy
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - stg-deploy:
+          requires:
+            - stg-hold-deploy
+            - stg-build-push-docker
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - stg-hold-clean-core:
+          type: approval
+          requires:
+            - build
+            - test
+            - stg-migrate-core
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - stg-clean-core:
+          requires:
+            - stg-hold-clean-core
+          filters:
+            branches:
+              ignore:
+                - /hotfix\/.*/
+                - /release\/.*/
+                - master
+
+      - pre-migrate-core:
+          requires:
+            - pre-hold-deploy
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-hold-deploy:
+          type: approval
+          requires:
+            - build
+            - test
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-build-push-docker:
+          requires:
+            - pre-hold-deploy
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-deploy:
+          requires:
+            - pre-hold-deploy
+            - pre-build-push-docker
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-hold-promote:
+          type: approval
+          requires:
+            - pre-deploy
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-promote:
+          requires:
+            - pre-hold-promote
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-hold-rollback-core-db:
+          type: approval
+          requires:
+            - build
+            - test
+            - pre-migrate-core
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-rollback-core-db:
+          requires:
+            - pre-hold-rollback-core-db
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-hold-clean-core:
+          type: approval
+          requires:
+            - build
+            - test
+            - pre-migrate-core
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - pre-clean-core:
+          requires:
+            - pre-hold-clean-core
+          filters:
+            branches:
+              only:
+                - /hotfix\/.*/
+                - /release\/.*/
+
+      - prd-hold-migrate-core:
+          type: approval
+          requires:
+            - build
+            - test
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-migrate-core:
+          requires:
+            - prd-hold-migrate-core
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-hold-rollback-db:
+          type: approval
+          requires:
+            - prd-migrate-core
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-rollback-core-db:
+          requires:
+            - prd-hold-rollback-db
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-hold-deploy:
+          type: approval
+          requires:
+            - build
+            - test
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-build-push-docker:
+          requires:
+            - prd-hold-deploy
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-deploy:
+          requires:
+            - prd-hold-deploy
+            - prd-build-push-docker
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-hold-promote:
+          type: approval
+          requires:
+            - prd-deploy
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-promote:
+          requires:
+            - prd-hold-promote
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-hold-rollback:
+          type: approval
+          requires:
+            - prd-promote
+          filters:
+            branches:
+              only:
+                - master
+
+      - prd-rollback:
+          requires:
+            - prd-hold-rollback
+          filters:
+            branches:
+              only:
+                - master
+  clean-staging:
+    when:
+      equal: [ "manual", << pipeline.parameters.workflow-trigger >>]
+    jobs:
+    - build
+    - stg-clean-core:
+        requires:
+          - build

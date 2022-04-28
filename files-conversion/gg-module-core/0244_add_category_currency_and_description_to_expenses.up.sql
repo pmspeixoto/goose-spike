@@ -1,0 +1,4 @@
+ALTER TABLE expenses
+    ADD COLUMN category VARCHAR(255) NOT NULL,
+    ADD COLUMN currency VARCHAR(255) NOT NULL,
+    ADD COLUMN description VARCHAR(255);

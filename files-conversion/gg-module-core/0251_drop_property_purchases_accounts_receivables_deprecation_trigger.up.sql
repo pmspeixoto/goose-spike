@@ -1,0 +1,1 @@
+DROP TRIGGER IF EXISTS property_purchases_accounts_receivables_deprecation;

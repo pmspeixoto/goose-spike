@@ -1,0 +1,2 @@
+ALTER TABLE users
+ADD COLUMN income_range VARCHAR(255);

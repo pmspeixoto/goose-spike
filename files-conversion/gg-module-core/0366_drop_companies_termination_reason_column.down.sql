@@ -1,0 +1,2 @@
+ALTER TABLE `companies`
+    ADD COLUMN `termination_reason` ENUM("PURCHASE_FELL_THROUGH", "MORTGAGE", "GG_SERVICE", "GG_MODEL", "COMPLIANCE", "OTHER");

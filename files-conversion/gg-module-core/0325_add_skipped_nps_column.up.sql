@@ -1,0 +1,2 @@
+ALTER TABLE net_promoter_scores
+  ADD COLUMN skipped BOOLEAN NOT NULL DEFAULT FALSE;
